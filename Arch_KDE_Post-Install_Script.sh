@@ -24,8 +24,8 @@ arch_programs=(
 aur_programs=(
     "auto-cpufreq"
     "caffeine-ng"
-    "jellyfin"
     "deemix-gui-git"
+    "jellyfin"
 )
 
 # Global variable for Flatpak programs
@@ -57,8 +57,8 @@ systemctl_programs=(
     "ufw"
     "cronie"
     "bluetooth"
-    "jellyfin"
     "auto-cpufreq"
+    "jellyfin"
 )
 
 #-------------------------------------------------------------------#
@@ -73,6 +73,10 @@ nvidia_arch=(
     "nvidia"
     "nvidia-utils"
     "nvidia-settings"
+    "lib32-nvidia-utils"
+    "cuda"
+    "opencl-nvidia"
+    "lib32-opencl-nvidia"
     "nvidia-prime"
     "nvtop"
 )
@@ -108,26 +112,34 @@ show_menu() {
 # Function to install Arch Linux programs
 install_arch_programs() {
     echo "Installing Arch Linux programs..."
+    programs_to_install=()
+
     for program in "${arch_programs[@]}"; do
         if ! pacman -Q "$program" &>/dev/null; then
-            pacman -S --noconfirm "$program"
+            programs_to_install+=("$program")
         else
             echo "$program is already installed."
         fi
     done
-    echo "Installation of Arch Linux programs completed."
+
+    if [ ${#programs_to_install[@]} -gt 0 ]; then
+        pacman -S --noconfirm "${programs_to_install[@]}"
+        echo "Installation of Arch Linux programs completed."
+    else
+        echo "No programs need to be installed."
+    fi
 }
 
 # Function to install Yay
 install_yay() {
-    if ! command -v git &>/dev/null; then
-        echo "Installing git..."
-        pacman -S --noconfirm git
-        echo "Git installation completed."
-    fi
     if ! command -v yay &>/dev/null; then
+        if ! command -v git &>/dev/null; then
+            echo "Installing git..."
+            pacman -S --noconfirm git
+            echo "Git installation completed."
+        fi
         echo "Installing Yay..."
-        git clone https://aur.archlinux.org/yay.git /tmp/yay
+        sudo -u $SUDO_USER git clone https://aur.archlinux.org/yay.git /tmp/yay
         sudo -u $SUDO_USER bash -c "cd /tmp/yay && makepkg -si --noconfirm"
         rm -rf /tmp/yay
         echo "Yay installation completed."
@@ -138,62 +150,118 @@ install_yay() {
 install_aur_programs_with_yay() {
     echo "Installing AUR programs with yay..."
     install_yay
+
+    # Create an array to store the AUR programs that need to be installed
+    aur_programs_to_install=()
+
     for program in "${aur_programs[@]}"; do
         if ! sudo -u $SUDO_USER yay -Q "$program" &>/dev/null; then
-            sudo -u $SUDO_USER yay -S --noconfirm "$program"
+            aur_programs_to_install+=("$program")
         else
             echo "$program is already installed."
         fi
     done
+
+    # Check if there are AUR programs to install
+    if [ ${#aur_programs_to_install[@]} -gt 0 ]; then
+        # Install all AUR programs in a single command
+        sudo -u $SUDO_USER yay -S --noconfirm "${aur_programs_to_install[@]}"
+    else
+        echo "No AUR programs need to be installed."
+    fi
+
     echo "Installation of AUR programs with yay completed."
 }
 
 # Function to install Flatpak programs
 install_flatpak_programs() {
+    if ! command -v flatpak &>/dev/null; then
+        pacman -S --noconfirm flatpak
+    fi
     echo "Installing Flatpak programs..."
-    flatpak install -y "${flatpak_programs[@]}"
+
+    # Create an array to store the Flatpak programs that need to be installed
+    flatpak_programs_to_install=()
+
+    for program in "${flatpak_programs[@]}"; do
+        if ! flatpak list | grep -q "$program"; then
+            flatpak_programs_to_install+=("$program")
+        else
+            echo "$program is already installed."
+        fi
+    done
+
+    # Check if there are Flatpak programs to install
+    if [ ${#flatpak_programs_to_install[@]} -gt 0 ]; then
+        # Install all Flatpak programs in a single command
+        flatpak install -y "${flatpak_programs_to_install[@]}"
+    else
+        echo "No Flatpak programs need to be installed."
+    fi
+
     echo "Installation of Flatpak programs completed."
 }
 
+
 # Function to install NVIDIA drivers and related programs
 install_nvidia_drivers_and_programs() {
+    # Check if the multilib repository is enabled
+    if ! grep -qE '^\[multilib\]$' /etc/pacman.conf; then
+        echo "The multilib repository is not enabled in /etc/pacman.conf."
+        echo "Please enable it manually, as it contains necessary packages for Nvidia drivers and related programs, and then rerun this script."
+        return
+    fi
+
+    # Update the system
+    pacman -Syu --noconfirm
+
     install_yay
 
     echo "Checking if NVIDIA drivers and related programs are already installed..."
-    local nvidia_installed=true
+
+    # Create separate arrays to store Arch Linux and AUR programs that need to be installed
+    arch_to_install=()
+    aur_to_install=()
 
     for program in "${nvidia_arch[@]}"; do
         if ! pacman -Q "$program" &>/dev/null; then
-            nvidia_installed=false
-            break
+            arch_to_install+=("$program")
         fi
     done
 
     for program in "${nvidia_aur[@]}"; do
         if ! sudo -u $SUDO_USER yay -Q "$program" &>/dev/null; then
-            nvidia_installed=false
-            break
+            aur_to_install+=("$program")
         fi
     done
 
-    if ! $nvidia_installed; then
-        echo "Installing NVIDIA drivers and related programs..."
-        sudo pacman -S --noconfirm "${nvidia_arch[@]}"
-        sudo -u $SUDO_USER yay -S --noconfirm "${nvidia_aur[@]}"
-        echo "Installation of NVIDIA drivers and related programs completed."
-
-        # Inform the user about configuration and reboot
-        echo "Remember to configure Optimus Manager to switch between GPUs (Intel/NVIDIA)."
-        read -p "Do you want to restart the system now? (Y/n): " choice
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            reboot
-        else
-            echo "Please restart the system later to apply the settings."
-        fi
+    if [[ ${#arch_to_install[@]} -gt 0 ]]; then
+        echo "Installing NVIDIA drivers and related Arch Linux programs..."
+        sudo pacman -S --noconfirm "${arch_to_install[@]}"
+        echo "Installation of NVIDIA drivers and related Arch Linux programs completed."
     else
-        echo "NVIDIA drivers and related programs are already installed."
+        echo "All Arch Linux programs are already installed."
+    fi
+
+    if [[ ${#aur_to_install[@]} -gt 0 ]]; then
+        echo "Installing NVIDIA-related AUR programs..."
+        sudo -u $SUDO_USER yay -S --noconfirm "${aur_to_install[@]}"
+        echo "Installation of NVIDIA-related AUR programs completed."
+    else
+        echo "All AUR programs are already installed."
+    fi
+
+    # Inform the user about configuration and reboot
+    echo "Remember to configure Optimus Manager to switch between GPUs (Intel/NVIDIA)."
+    read -p "Do you want to restart the system now? (Y/n): " choice
+    if [[ $choice =~ ^[Yy]*$ ]]; then
+        reboot
+    else
+        echo "Please restart the system later to apply the settings."
     fi
 }
+
+
 
 # Function to enable and start programs/services with systemctl
 enable_and_start_programs() {
@@ -207,7 +275,7 @@ enable_and_start_programs() {
         else
             echo "Status of $program: Enabled - $enabled, Active - $active"
             read -p "Do you want to enable and start $program? (Y/n): " choice
-            if [[ $choice =~ ^[Yy]$ ]]; then
+            if [[ $choice =~ ^[Yy]*$ ]]; then
                 systemctl enable "$program"
                 systemctl start "$program"
                 echo "$program enabled and started."
@@ -222,10 +290,31 @@ enable_and_start_programs() {
 # Function to update the system and clean the cache
 update_and_clean() {
     echo "Updating the system and cleaning the cache..."
+
+    # Update the system
     pacman -Syu --noconfirm
-    paccache -rk0
+
+    # Check if the extra repository is necessary for 'paccache'
+    if ! grep -qE '^\[extra\]$' /etc/pacman.conf; then
+        echo "This function requires the extra repository to run 'paccache'."
+        echo "Please enable it manually in /etc/pacman.conf and then run this script again."
+        return
+    fi
+
+    # Check if the 'paccache' command is available
+    if ! command -v paccache &>/dev/null; then
+        echo "Installing paccache..."
+        pacman -S --noconfirm pacman-contrib
+        paccache -rk0
+        echo "paccache installation completed."
+    else
+        paccache -rk0
+        echo "paccache installation completed."
+    fi
+
     echo "Update and cleanup completed."
 }
+
 
 # Main loop
 check_root
